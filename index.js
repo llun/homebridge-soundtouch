@@ -28,14 +28,12 @@ function SoundTouchAccessory(log, config) {
   }
 
   this.service = new Service.Speaker(this.name);
-
   this.service
-    .getCharacteristic(Characteristic.On)
+    .addCharacteristic(Characteristic.On)
     .on('get', this._getOn.bind(this))
     .on('set', this._setOn.bind(this));
-
   this.service
-    .addCharacteristic(Characteristic.Volume)
+    .getCharacteristic(Characteristic.Volume)
     .on('get', this._getVolume.bind(this))
     .on('set', this._setVolume.bind(this));
 
