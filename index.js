@@ -236,6 +236,10 @@ SoundTouchAccessory.prototype._setPreset = function(preset, value, callback) {
                   .getCharacteristic(`Preset${item}`)
                   .updateValue(false, resolve))
           )
+          .concat([
+            new Promise(resolve =>
+              this.service.getCharacteristic('AUX').updateValue(false, resolve))
+          ])
       ))
     .then(data => {
       callback(null);
@@ -273,7 +277,25 @@ SoundTouchAccessory.prototype._setAUX = function(value, callback) {
     return;
   }
 
-  callback(null);
+  var accessory = this;
+  const presets = [];
+  for (let index = MIN_PRESET; index <= MAX_PRESET; index++) {
+    presets.push(index);
+  }
+  new Promise(resolve => accessory.device.pressKey('AUX_INPUT', resolve))
+    .then(data =>
+      Promise.all(
+        presets.map(
+          item =>
+            new Promise(resolve =>
+              this.service
+                .getCharacteristic(`Preset${item}`)
+                .updateValue(false, resolve))
+        )
+      ))
+    .then(data => {
+      callback(null);
+    });
 };
 
 function makePresetCharacteristic(number) {
