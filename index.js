@@ -29,9 +29,9 @@ function SoundTouchAccessory(log, config) {
 
   this.service = new Service.Speaker(this.name);
   this.service
-    .addCharacteristic(Characteristic.On)
-    .on('get', this._getOn.bind(this))
-    .on('set', this._setOn.bind(this));
+    .getCharacteristic(Characteristic.Mute)
+    .on('get', this._getMute.bind(this))
+    .on('set', this._setMute.bind(this));
   this.service
     .getCharacteristic(Characteristic.Volume)
     .on('get', this._getVolume.bind(this))
@@ -83,7 +83,7 @@ SoundTouchAccessory.prototype.getServices = function() {
   return [this.service, this.getInformationService()];
 };
 
-SoundTouchAccessory.prototype._getOn = function(callback) {
+SoundTouchAccessory.prototype._getMute = function(callback) {
   if (!this.device) {
     this.log.warn(
       'Ignoring request; SoundTouch device has not yet been discovered.'
@@ -96,11 +96,11 @@ SoundTouchAccessory.prototype._getOn = function(callback) {
 
   this.device.isAlive(function(isOn) {
     accessory.log('Check if is playing: %s', isOn);
-    callback(null, isOn);
+    callback(null, !isOn);
   });
 };
 
-SoundTouchAccessory.prototype._setOn = function(on, callback) {
+SoundTouchAccessory.prototype._setMute = function(mute, callback) {
   if (!this.device) {
     this.log.warn(
       'Ignoring request; SoundTouch device has not yet been discovered.'
@@ -111,9 +111,9 @@ SoundTouchAccessory.prototype._setOn = function(on, callback) {
 
   var accessory = this;
 
-  if (on) {
+  if (!mute) {
     this.device.powerOn(function(isTurnedOn) {
-      accessory.log(isTurnedOn ? 'Power On' : 'Was already powered on');
+      accessory.log(isTurnedOn ? 'Unmute' : 'Was already unmute');
       accessory.device.play(function(json) {
         accessory.log('Playing...');
         callback(null);
@@ -121,7 +121,7 @@ SoundTouchAccessory.prototype._setOn = function(on, callback) {
     });
   } else {
     this.device.powerOff(function() {
-      accessory.log('Powering Off...');
+      accessory.log('Mute...');
       callback(null);
     });
   }
