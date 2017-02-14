@@ -1,339 +1,169 @@
-var soundtouch = require('soundtouch');
-var inspect = require('util').inspect;
-var inherits = require('util').inherits;
-var Service, Characteristic;
+const soundtouch = require('soundtouch')
+const _ = require('lodash')
+const inherits = require('util').inherits
 
-const MIN_PRESET = 1;
-const MAX_PRESET = 6;
+let Service, Characteristic
 
-module.exports = function(homebridge) {
-  Service = homebridge.hap.Service;
-  Characteristic = homebridge.hap.Characteristic;
+class SoundTouchAccessory {
+  constructor (log, config) {
+    this.log = log
+    this.config = config
+    this.name = config.name
+    this.room = config.room
+
+    if (!this.room) throw new Error('You must provide a  config value for "room".')
+
+    this.service = new Service.Speaker(this.name)
+    this.service
+      .getCharacteristic(Characteristic.Volume)
+      .on('get', callback => this.guard(this.getVolume, callback))
+      .on('set', (volume, callback) => this.guard(this.setVolume, callback, volume))
+    this.service
+      .addCharacteristic(Characteristic.On)
+      .on('get', callback => this.guard(this.isOn, callback))
+      .on('set', (on, callback) => this.guard(this.setOn, callback, on))
+    this.service
+      .addCharacteristic(this.createAUXCharacteristic())
+      .on('set', (value, callback) => this.guard(this.setAUX, callback, value))
+    _.range(6).forEach(index => {
+      this.service
+        .addCharacteristic(this.createPresetCharacteristic(index))
+        .on('set', (value, callback) => this.guard(this.setPreset, callback, index))
+    })
+    this.search()
+  }
+
+  getServices () {
+    return [this.service, this.getInformationService()]
+  }
+
+  getInformationService () {
+    var informationService = new Service.AccessoryInformation()
+    informationService
+      .setCharacteristic(Characteristic.Name, this.name)
+      .setCharacteristic(Characteristic.Manufacturer, 'Bose SoundTouch')
+      .setCharacteristic(Characteristic.Model, '1.0.0')
+      .setCharacteristic(Characteristic.SerialNumber, this.room)
+    return informationService
+  }
+
+  identify (callback) {
+    this.log('Identify request')
+    callback()
+  }
+
+  guard (fn, callback, value) {
+    if (!this.device) {
+      this.log.warn('Ignoring request; SoundTouch device has not yet been discovered.')
+      callback(new Error('SoundTouch has not been discovered yet.'))
+      return
+    }
+
+    if (value) fn(value, callback)
+    else fn(callback)
+  }
+
+  search () {
+    soundtouch.search(device => {
+      if (this.room !== device.name) {
+        this.log(
+          `Ignoring device because the room name ${this.room} does not match the desired name ${device.room}`)
+        return
+      }
+
+      this.log(`Found Bose SoundTouch device: ${device.name}`)
+      this.device = device
+      soundtouch.stopSearching()
+    }, device => {
+      this.log(`Bose SoundTouch device goes offline: ${device.name}`)
+    })
+  }
+
+  getVolume (callback) {
+    this.device.getVolume(json => {
+      const volume = json.volume.actualvolume
+      this.log(`Current volume: ${volume}`)
+      callback(null, volume * 1)
+    })
+  }
+
+  setVolume (volume, callback) {
+    this.device.setVolume(volume, () => {
+      this.log(`Setting volume to ${volume}`)
+      callback(null)
+    })
+  }
+
+  isOn (callback) {
+    this.device.isAlive(isOn => {
+      this.log(`Check if is playing: ${isOn}`)
+      callback(null, isOn)
+    })
+  }
+
+  setOn (value, callback) {
+    if (value) {
+      this.device.powerOn(isTurnedOn => {
+        this.log(isTurnedOn ? 'Power On' : 'Was already powered on')
+        this.device.play(json => {
+          this.log('Playing...')
+          callback(null)
+        })
+      })
+    } else {
+      this.device.powerOff(() => {
+        this.log('Powering Off...')
+        callback(null)
+      })
+    }
+  }
+
+  setPreset (value, callback) {
+    this.device.pressKey(`PRESET_${value}`, () => { callback(null) })
+  }
+
+  setAUX (value, callback) {
+    this.device.pressKey('AUX_INPUT', () => { callback(null) })
+  }
+
+  createPresetCharacteristic (number) {
+    const characteristic = function () {
+      Characteristic.call(
+        this,
+        `Preset${number}`,
+        `00000074-${number}000-1000-8000-0026BB765291`
+      )
+      this.setProps({
+        perms: [Characteristic.Perms.WRITE]
+      })
+      this.value = this.getDefaultValue()
+    }
+    inherits(characteristic, Characteristic)
+    characteristic.UUID = `00000074-${number}000-1000-8000-0026BB765291`
+    return characteristic
+  }
+
+  createAUXCharacteristic () {
+    const characteristic = function () {
+      Characteristic.call(this, 'AUX', '00000074-0100-1000-8000-0026BB765291')
+      this.setProps({
+        perms: [Characteristic.Perms.WRITE]
+      })
+      this.value = this.getDefaultValue()
+    }
+    inherits(characteristic, Characteristic)
+    characteristic.UUID = '00000074-0100-1000-8000-0026BB765291'
+    return characteristic
+  }
+}
+
+module.exports = function (homebridge) {
+  Service = homebridge.hap.Service
+  Characteristic = homebridge.hap.Characteristic
 
   homebridge.registerAccessory(
     'homebridge-soundtouch',
     'SoundTouch',
     SoundTouchAccessory
-  );
-};
-
-//
-// SoundTouch Accessory
-//
-
-function SoundTouchAccessory(log, config) {
-  this.log = log;
-  this.config = config;
-  this.name = config['name'];
-  this.room = config['room'];
-
-  if (!this.room) {
-    throw new Error("You must provide a config value for 'room'.");
-  }
-
-  this.service = new Service.Speaker(this.name);
-  this.service
-    .getCharacteristic(Characteristic.Mute)
-    .on('get', this._getMute.bind(this))
-    .on('set', this._setMute.bind(this));
-  this.service
-    .getCharacteristic(Characteristic.Volume)
-    .on('get', this._getVolume.bind(this))
-    .on('set', this._setVolume.bind(this));
-  for (let i = MIN_PRESET; i <= MAX_PRESET; i++) {
-    this.service
-      .addCharacteristic(makePresetCharacteristic(i))
-      .on('get', this._getPreset.bind(this, i))
-      .on('set', this._setPreset.bind(this, i));
-  }
-  this.service
-    .addCharacteristic(makeAUXCharacteristic())
-    .on('get', this._getAUX.bind(this))
-    .on('set', this._setAUX.bind(this));
-
-  // begin searching for a SoundTouch device with the given name
-  this.search();
-}
-
-SoundTouchAccessory.prototype.search = function() {
-  var accessory = this;
-  accessory.soundtouch = soundtouch;
-
-  accessory.soundtouch.search(
-    function(device) {
-      if (accessory.room != device.name) {
-        accessory.log(
-          "Ignoring device because the room name '%s' does not match the desired name '%s'.",
-          device.name,
-          accessory.room
-        );
-        return;
-      }
-
-      accessory.log('Found Bose SoundTouch device: %s', device.name);
-      accessory.device = device;
-
-      //we found the device, so stop looking
-      soundtouch.stopSearching();
-    },
-    function(device) {
-      accessory.log('Bose SoundTouch device goes offline: %s', device.name);
-    }
-  );
-};
-
-SoundTouchAccessory.prototype.getInformationService = function() {
-  var informationService = new Service.AccessoryInformation();
-  informationService
-    .setCharacteristic(Characteristic.Name, this.name)
-    .setCharacteristic(Characteristic.Manufacturer, 'Bose SoundTouch')
-    .setCharacteristic(Characteristic.Model, '1.0.0')
-    .setCharacteristic(Characteristic.SerialNumber, this.room);
-  return informationService;
-};
-
-SoundTouchAccessory.prototype.getServices = function() {
-  return [this.service, this.getInformationService()];
-};
-
-SoundTouchAccessory.prototype._getMute = function(callback) {
-  if (!this.device) {
-    this.log.warn(
-      'Ignoring request; SoundTouch device has not yet been discovered.'
-    );
-    callback(new Error('SoundTouch has not been discovered yet.'));
-    return;
-  }
-
-  var accessory = this;
-
-  this.device.isAlive(function(isOn) {
-    accessory.log('Check if is playing: %s', isOn);
-    callback(null, !isOn);
-  });
-};
-
-SoundTouchAccessory.prototype._setMute = function(mute, callback) {
-  if (!this.device) {
-    this.log.warn(
-      'Ignoring request; SoundTouch device has not yet been discovered.'
-    );
-    callback(new Error('SoundTouch has not been discovered yet.'));
-    return;
-  }
-
-  var accessory = this;
-
-  if (!mute) {
-    this.device.powerOn(function(isTurnedOn) {
-      accessory.log(isTurnedOn ? 'Unmute' : 'Was already unmute');
-      accessory.device.play(function(json) {
-        accessory.log('Playing...');
-        callback(null);
-      });
-    });
-  } else {
-    this.device.powerOff(function() {
-      accessory.log('Mute...');
-      callback(null);
-    });
-  }
-};
-
-SoundTouchAccessory.prototype._getVolume = function(callback) {
-  if (!this.device) {
-    this.log.warn(
-      'Ignoring request; SoundTouch device has not yet been discovered.'
-    );
-    callback(new Error('SoundTouch has not been discovered yet.'));
-    return;
-  }
-
-  var accessory = this;
-
-  this.device.getVolume(function(json) {
-    var volume = json.volume.actualvolume;
-    accessory.log('Current volume: %s', volume);
-    callback(null, volume * 1);
-  });
-};
-
-SoundTouchAccessory.prototype._setVolume = function(volume, callback) {
-  if (!this.device) {
-    this.log.warn(
-      'Ignoring request; SoundTouch device has not yet been discovered.'
-    );
-    callback(new Error('SoundTouch has not been discovered yet.'));
-    return;
-  }
-
-  var accessory = this;
-
-  this.device.setVolume(volume, function() {
-    accessory.log('Setting volume to %s', volume);
-    callback(null);
-  });
-};
-
-SoundTouchAccessory.prototype._getPreset = function(preset, callback) {
-  if (!this.device) {
-    this.log.warn(
-      'Ignoring request; SoundTouch device has not yet been discovered.'
-    );
-    callback(new Error('SoundTouch has not been discovered yet.'));
-    return;
-  }
-
-  var accessory = this;
-  Promise.all([
-    new Promise(resolve => accessory.device.getPresets(resolve)),
-    new Promise(resolve => accessory.device.getNowPlaying(resolve))
-  ]).then(data => {
-    const presets = data[0].presets;
-    const nowPlaying = data[1].nowPlaying;
-    const currentPreset = presets.preset[preset];
-
-    if (!currentPreset) return callback(null, false);
-
-    const currentPresetItem = currentPreset.ContentItem;
-    const nowPlayingItem = nowPlaying.ContentItem;
-    if (
-      currentPresetItem.source === nowPlayingItem.source &&
-        currentPresetItem.sourceAccount === nowPlayingItem.sourceAccount &&
-        currentPresetItem.location === nowPlayingItem.location
-    ) {
-      return callback(null, true);
-    }
-
-    return callback(null, false);
-  });
-};
-
-SoundTouchAccessory.prototype._setPreset = function(preset, value, callback) {
-  if (!this.device) {
-    this.log.warn(
-      'Ignoring request; SoundTouch device has not yet been discovered.'
-    );
-    callback(new Error('SoundTouch has not been discovered yet.'));
-    return;
-  }
-
-  var accessory = this;
-  const presets = [];
-  for (let index = MIN_PRESET; index <= MAX_PRESET; index++) {
-    presets.push(index);
-  }
-
-  new Promise(resolve => accessory.device.pressKey(`PRESET_${preset}`, resolve))
-    .then(data =>
-      Promise.all(
-        presets
-          .filter(item => item !== preset)
-          .map(
-            item =>
-              new Promise(resolve =>
-                this.service
-                  .getCharacteristic(`Preset${item}`)
-                  .updateValue(false, resolve))
-          )
-          .concat([
-            new Promise(resolve =>
-              this.service.getCharacteristic('AUX').updateValue(false, resolve))
-          ])
-      ))
-    .then(data => {
-      callback(null);
-    })
-    .catch(error => {
-      accessory.log(error);
-      callback(error);
-    });
-};
-
-SoundTouchAccessory.prototype._getAUX = function(callback) {
-  if (!this.device) {
-    this.log.warn(
-      'Ignoring request; SoundTouch device has not yet been discovered.'
-    );
-    callback(new Error('SoundTouch has not been discovered yet.'));
-    return;
-  }
-
-  var accessory = this;
-  new Promise(resolve =>
-    accessory.device.getNowPlaying(resolve)).then(nowPlaying => {
-    if (nowPlaying.nowPlaying.ContentItem.source === 'AUX')
-      return callback(null, true);
-    return callback(null, false);
-  });
-};
-
-SoundTouchAccessory.prototype._setAUX = function(value, callback) {
-  if (!this.device) {
-    this.log.warn(
-      'Ignoring request; SoundTouch device has not yet been discovered.'
-    );
-    callback(new Error('SoundTouch has not been discovered yet.'));
-    return;
-  }
-
-  var accessory = this;
-  const presets = [];
-  for (let index = MIN_PRESET; index <= MAX_PRESET; index++) {
-    presets.push(index);
-  }
-  new Promise(resolve => accessory.device.pressKey('AUX_INPUT', resolve))
-    .then(data =>
-      Promise.all(
-        presets.map(
-          item =>
-            new Promise(resolve =>
-              this.service
-                .getCharacteristic(`Preset${item}`)
-                .updateValue(false, resolve))
-        )
-      ))
-    .then(data => {
-      callback(null);
-    });
-};
-
-function makePresetCharacteristic(number) {
-  const characteristic = function() {
-    Characteristic.call(
-      this,
-      `Preset${number}`,
-      `00000074-${number}000-1000-8000-0026BB765291`
-    );
-    this.setProps({
-      format: Characteristic.Formats.BOOL,
-      perms: [
-        Characteristic.Perms.READ,
-        Characteristic.Perms.WRITE,
-        Characteristic.Perms.NOTIFY
-      ]
-    });
-    this.value = this.getDefaultValue();
-  };
-  inherits(characteristic, Characteristic);
-  characteristic.UUID = `00000074-${number}000-1000-8000-0026BB765291`;
-  return characteristic;
-}
-
-function makeAUXCharacteristic() {
-  const characteristic = function() {
-    Characteristic.call(this, 'AUX', '00000074-0100-1000-8000-0026BB765291');
-    this.setProps({
-      format: Characteristic.Formats.BOOL,
-      perms: [
-        Characteristic.Perms.READ,
-        Characteristic.Perms.WRITE,
-        Characteristic.Perms.NOTIFY
-      ]
-    });
-    this.value = this.getDefaultValue();
-  };
-  inherits(characteristic, Characteristic);
-  characteristic.UUID = '00000074-0100-1000-8000-0026BB765291';
-  return characteristic;
+  )
 }
