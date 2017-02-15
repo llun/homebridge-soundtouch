@@ -24,6 +24,9 @@ class SoundTouchAccessory {
       .on('get', callback => this.guard(this.isMute, callback))
       .on('set', (isOn, callback) => this.guard(this.setMute, callback, isOn))
     this.service
+      .addCharacteristic(this.createIPCharacteristic())
+      .on('get', callback => this.guard(this.getIP, callback))
+    this.service
       .addCharacteristic(this.createAUXCharacteristic())
       .on('get', callback => this.guard(this.getAUX, callback))
       .on('set', (value, callback) => this.guard(this.setAUX, callback, value))
@@ -68,6 +71,7 @@ class SoundTouchAccessory {
 
   search () {
     soundtouch.search(device => {
+      this.log(device)
       if (this.room !== device.name) {
         this.log(
           `Ignoring device because the room name ${this.room} does not match the desired name ${device.room}`)
@@ -123,6 +127,10 @@ class SoundTouchAccessory {
         callback(null)
       })
     }
+  }
+
+  getIP (callback) {
+    callback(null, this.device.device.ip)
   }
 
   getPreset (callback) {
@@ -197,6 +205,20 @@ class SoundTouchAccessory {
     }
     inherits(characteristic, Characteristic)
     characteristic.UUID = '00000074-0100-1000-8000-0026BB765291'
+    return characteristic
+  }
+
+  createIPCharacteristic () {
+    const characteristic = function () {
+      Characteristic.call(this, 'IP', '00000074-0200-1000-8000-0026BB765291')
+      this.setProps({
+        format: Characteristic.Formats.STRING,
+        perms: [Characteristic.Perms.READ]
+      })
+      this.value = this.getDefaultValue()
+    }
+    inherits(characteristic, Characteristic)
+    characteristic.UUID = '00000074-0200-1000-8000-0026BB765291'
     return characteristic
   }
 }
