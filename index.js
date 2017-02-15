@@ -30,7 +30,7 @@ class SoundTouchAccessory {
     _.range(1, 7).forEach(index => {
       this.service
         .addCharacteristic(this.createPresetCharacteristic(index))
-        .on('get', callback => this.guard(this.getPreset(index), callback))
+        .on('get', callback => this.guard(this.getPreset, callback))
         .on('set', (value, callback) => this.guard(this.setPreset(index), callback, value))
     })
     this.search()
@@ -76,6 +76,10 @@ class SoundTouchAccessory {
 
       this.log(`Found Bose SoundTouch device: ${device.name}`)
       this.device = device
+      this.getVolume((error, volume) => {
+        if (error) return
+        this.service.setCharacteristic(Characteristic.Volume, volume)
+      })
       soundtouch.stopSearching()
     }, device => {
       this.log(`Bose SoundTouch device goes offline: ${device.name}`)
@@ -121,61 +125,39 @@ class SoundTouchAccessory {
     }
   }
 
-  getPreset (index) {
-    return (callback) => {
-      const accessory = this
-      co(function* () {
-        const presets = yield new Promise(resolve => accessory.device.getPreset(resolve))
-        const nowPlaying = yield new Promise(resolve => accessory.device.getNowPlaying(resolve))
-        const currentPreset = presets.presets.preset[index]
-
-        if (!currentPreset) return false
-
-        const currentPresetItem = currentPreset.ContentItem
-        const nowPlayingItem = nowPlaying.ContentItem
-        return currentPresetItem.source === nowPlayingItem.source &&
-          currentPresetItem.sourceAccount === nowPlayingItem.sourceAccount &&
-          currentPresetItem.location === nowPlayingItem.location
-      }).then(value => callback(null, value))
-    }
+  getPreset (callback) {
+    // Alway returns null to make the toggle off
+    callback(null, false)
   }
 
   setPreset (index) {
+    const accessory = this
     return (value, callback) => {
-      const accessory = this
       co(function* () {
-        for (let i = 1; i <= 6; i++) {
-          if (i === index) {
-            yield new Promise(resolve => accessory.device.pressKey(`PRESET_${index + 1}`, resolve))
-            continue
-          }
-          yield new Promise(resolve => accessory.service
-            .getCharacteristic('AUX')
-            .updateValue(false, resolve))
+        if (value) {
+          yield new Promise(resolve => accessory.device.pressKey(`PRESET_${index}`, resolve))
         }
+        setTimeout(() => {
+          accessory.service.setCharacteristic(`Preset${index}`, 0)
+        }, 400)
       }).then(() => callback(null))
     }
   }
 
   getAUX (callback) {
-    var accessory = this
-    co(function* () {
-      const nowPlaying = yield new Promise(resolve => accessory.device.getNowPlaying(resolve))
-      return nowPlaying.nowPlaying.ContentItem.source === 'AUX'
-    }).then(value => callback(null, value))
+    callback(null, false)
   }
 
   setAUX (value, callback) {
     const accessory = this
     co(function* () {
-      for (let i = 1; i <= 6; i++) {
-        yield new Promise(resolve => accessory.service
-          .getCharacteristic(`Preset${i}`)
-          .updateValue(false, resolve))
+      if (value) {
+        yield new Promise(resolve => accessory.device.pressKey(`AUX_INPUT`, resolve))
       }
-      yield new Promise(resolve => accessory.device.pressKey('AUX_INPUT', resolve))
-    })
-    .then(() => callback(null))
+      setTimeout(() => {
+        accessory.service.setCharacteristic('AUX', 0)
+      }, 400)
+    }).then(() => callback(null))
   }
 
   createPresetCharacteristic (number) {
