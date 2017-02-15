@@ -71,7 +71,6 @@ class SoundTouchAccessory {
 
   search () {
     soundtouch.search(device => {
-      this.log(device)
       if (this.room !== device.name) {
         this.log(
           `Ignoring device because the room name ${this.room} does not match the desired name ${device.room}`)
